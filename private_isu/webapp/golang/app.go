@@ -198,7 +198,8 @@ func makePosts(results []*Post, CSRFToken string, allComments bool) ([]*Post, er
 		}
 
 		for i := 0; i < len(comments); i++ {
-			uerr := db.Get(&comments[i].User, "SELECT * FROM `users` WHERE `id` = ?", comments[i].UserID)
+			comments[i].User = &User{}
+			uerr := db.Get(comments[i].User, "SELECT * FROM `users` WHERE `id` = ?", comments[i].UserID)
 			if uerr != nil {
 				return nil, uerr
 			}
@@ -211,7 +212,8 @@ func makePosts(results []*Post, CSRFToken string, allComments bool) ([]*Post, er
 
 		p.Comments = comments
 
-		perr := db.Get(&p.User, "SELECT * FROM `users` WHERE `id` = ?", p.UserID)
+		p.User = &User{}
+		perr := db.Get(p.User, "SELECT * FROM `users` WHERE `id` = ?", p.UserID)
 		if perr != nil {
 			return nil, perr
 		}
