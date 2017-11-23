@@ -14,7 +14,7 @@ type Comment struct {
 	PostID        int       `db:"post_id" redis:"post_id"`
 	UserID        int       `db:"user_id" redis:"user_id"`
 	Comment       string    `db:"comment" redis:"comment"`
-	CreatedAt     time.Time `db:"created_at"`
+	CreatedAt     time.Time `db:"created_at" redis:"-"`
 	CreatedAtNano int64     `redis:"created_at"`
 	User          *User     `redis:"-"`
 }
