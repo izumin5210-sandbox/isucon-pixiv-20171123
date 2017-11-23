@@ -892,7 +892,7 @@ func main() {
 		},
 	}
 
-	commentStore, err = ro.New(redisPool.Get, &Comment{}, ro.WithScorer(CommentScorerMap))
+	commentStore, err = ro.New(redisPool.Get, &Comment{}, ro.WithScorers(CommentScorerFuncs))
 	if err != nil {
 		log.Fatalf("Failed to create comment store instance: %v", err)
 	}
