@@ -10,12 +10,13 @@ import (
 
 type Comment struct {
 	ro.Model
-	ID        int       `db:"id" redis:"id"`
-	PostID    int       `db:"post_id" redis:"post_id"`
-	UserID    int       `db:"user_id" redis:"user_id"`
-	Comment   string    `db:"comment" redis:"comment"`
-	CreatedAt time.Time `db:"created_at" redis:"created_at"`
-	User      *User
+	ID            int       `db:"id" redis:"id"`
+	PostID        int       `db:"post_id" redis:"post_id"`
+	UserID        int       `db:"user_id" redis:"user_id"`
+	Comment       string    `db:"comment" redis:"comment"`
+	CreatedAt     time.Time `db:"created_at"`
+	CreatedAtNano int64     `redis:"created_at"`
+	User          *User     `redis:"-"`
 }
 
 func (c *Comment) GetKeySuffix() string {
@@ -30,6 +31,6 @@ var CommentScorerMap = map[string]types.ScorerFunc{
 		return m.(*Comment).UserID
 	},
 	"created_at": func(m types.Model) interface{} {
-		return m.(*Comment).CreatedAt.UnixNano()
+		return m.(*Comment).CreatedAtNano
 	},
 }

@@ -100,6 +100,9 @@ func dbInitialize() {
 		handleError(err)
 		return
 	}
+	for _, c := range comments {
+		c.CreatedAtNano = c.CreatedAt.UnixNano()
+	}
 	err = commentStore.Set(comments)
 	if err != nil {
 		handleError(err)
@@ -763,10 +766,11 @@ func postComment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	crerr := commentStore.Set(&Comment{
-		ID:      int(id),
-		PostID:  postID,
-		UserID:  me.ID,
-		Comment: body,
+		ID:            int(id),
+		PostID:        postID,
+		UserID:        me.ID,
+		Comment:       body,
+		CreatedAtNano: time.Now().UnixNano(),
 	})
 	if cerr != nil {
 		handleError(crerr)
