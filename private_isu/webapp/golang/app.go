@@ -200,18 +200,18 @@ func makePosts(results []*Post, CSRFToken string, allComments bool) ([]*Post, er
 	var posts []*Post
 
 	for _, p := range results {
-		cnt, err := commentStore.Count(commentStore.Query("post").GtEq(p.ID).LtEq(p.ID))
+		cnt, err := commentStore.Count(commentStore.Query("post").Eq(p.ID))
 		if err != nil {
 			return nil, err
 		}
 		p.CommentCount = cnt
 
-		query := "SELECT * FROM `comments` WHERE `post_id` = ? ORDER BY `created_at` DESC"
+		query := commentStore.Query("post").Eq(p.ID).Reverse()
 		if !allComments {
-			query += " LIMIT 3"
+			query = query.Limit(3)
 		}
 		var comments []*Comment
-		cerr := db.Select(&comments, query, p.ID)
+		cerr := commentStore.Select(&comments, query)
 		if cerr != nil {
 			return nil, cerr
 		}
