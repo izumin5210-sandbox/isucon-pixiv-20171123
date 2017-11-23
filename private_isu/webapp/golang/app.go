@@ -197,10 +197,11 @@ func makePosts(results []*Post, CSRFToken string, allComments bool) ([]*Post, er
 	var posts []*Post
 
 	for _, p := range results {
-		err := db.Get(&p.CommentCount, "SELECT COUNT(*) AS `count` FROM `comments` WHERE `post_id` = ?", p.ID)
+		cnt, err := commentStore.Count(commentStore.Query("post").GtEq(p.ID).LtEq(p.ID))
 		if err != nil {
 			return nil, err
 		}
+		p.CommentCount = cnt
 
 		query := "SELECT * FROM `comments` WHERE `post_id` = ? ORDER BY `created_at` DESC"
 		if !allComments {
@@ -467,8 +468,7 @@ func getAccountName(c web.C, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	commentCount := 0
-	cerr := db.Get(&commentCount, "SELECT COUNT(*) AS count FROM `comments` WHERE `user_id` = ?", user.ID)
+	commentCount, cerr := commentStore.Count(commentStore.Query("user").GtEq(user.ID).LtEq(user.ID))
 	if cerr != nil {
 		handleError(cerr)
 		return
