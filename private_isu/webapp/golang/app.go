@@ -96,6 +96,44 @@ func dbInitialize() {
 	}
 }
 
+func writeImage(postID int, ext string, img []byte) error {
+	return ioutil.WriteFile(fmt.Sprintf("../public/images/%d.%s", postID, ext), img, 0670)
+}
+
+func dumpImages(w http.ResponseWriter, r *http.Request) {
+	posts := []*Post{}
+	limit := 10
+	i := 0
+	for {
+		err := db.Select(&posts, fmt.Sprintf("SELECT `id`, `mime`, `imgdata` FROM `posts` LIMIT %d OFFSET %d", limit, i*limit))
+		if err != nil {
+			panic(err)
+		}
+		if len(posts) == 0 {
+			w.WriteHeader(http.StatusOK)
+			break
+		}
+		for _, p := range posts {
+			ext := ""
+			switch p.Mime {
+			case "image/jpeg":
+				ext = "jpg"
+			case "image/png":
+				ext = "png"
+			case "image/gif":
+				ext = "gif"
+			default:
+				panic("Unknown image format")
+			}
+			err := writeImage(p.ID, ext, p.Imgdata)
+			if err != nil {
+				panic(err)
+			}
+		}
+		i++
+	}
+}
+
 func tryLogin(accountName, password string) *User {
 	u := User{}
 	err := db.Get(&u, "SELECT * FROM users WHERE account_name = ? AND del_flg = 0", accountName)
@@ -621,15 +659,19 @@ func postIndex(w http.ResponseWriter, r *http.Request) {
 	}
 
 	mime := ""
+	ext := ""
 	if file != nil {
 		// 投稿のContent-Typeからファイルのタイプを決定する
 		contentType := header.Header["Content-Type"][0]
 		if strings.Contains(contentType, "jpeg") {
 			mime = "image/jpeg"
+			ext = "jpg"
 		} else if strings.Contains(contentType, "png") {
 			mime = "image/png"
+			ext = "png"
 		} else if strings.Contains(contentType, "gif") {
 			mime = "image/gif"
+			ext = "gif"
 		} else {
 			session := getSession(r)
 			session.Values["notice"] = "投稿できる画像形式はjpgとpngとgifだけです"
@@ -654,12 +696,11 @@ func postIndex(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	query := "INSERT INTO `posts` (`user_id`, `mime`, `imgdata`, `body`) VALUES (?,?,?,?)"
+	query := "INSERT INTO `posts` (`user_id`, `mime`, `body`) VALUES (?,?,?)"
 	result, eerr := db.Exec(
 		query,
 		me.ID,
 		mime,
-		filedata,
 		r.FormValue("body"),
 	)
 	if eerr != nil {
@@ -670,6 +711,12 @@ func postIndex(w http.ResponseWriter, r *http.Request) {
 	pid, lerr := result.LastInsertId()
 	if lerr != nil {
 		fmt.Println(lerr.Error())
+		return
+	}
+
+	ierr := writeImage(int(pid), ext, filedata)
+	if eerr != nil {
+		fmt.Println(ierr.Error())
 		return
 	}
 
@@ -841,6 +888,7 @@ func main() {
 	goji.Post("/comment", postComment)
 	goji.Get("/admin/banned", getAdminBanned)
 	goji.Post("/admin/banned", postAdminBanned)
+	goji.Get("/dump_images", dumpImages)
 	goji.Get("/*", http.FileServer(http.Dir("../public")))
 	goji.Serve()
 }
