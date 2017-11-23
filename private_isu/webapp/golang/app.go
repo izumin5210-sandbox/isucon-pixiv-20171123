@@ -20,16 +20,20 @@ import (
 
 	"github.com/bradfitz/gomemcache/memcache"
 	gsm "github.com/bradleypeabody/gorilla-sessions-memcache"
+	"github.com/garyburd/redigo/redis"
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/gorilla/sessions"
+	"github.com/izumin5210/ro"
 	"github.com/jmoiron/sqlx"
 	"github.com/zenazn/goji"
 	"github.com/zenazn/goji/web"
 )
 
 var (
-	db    *sqlx.DB
-	store *gsm.MemcacheStore
+	db           *sqlx.DB
+	store        *gsm.MemcacheStore
+	redisPool    *redis.Pool
+	commentStore ro.Store
 )
 
 var (
@@ -68,15 +72,6 @@ type Post struct {
 	CSRFToken    string
 }
 
-type Comment struct {
-	ID        int       `db:"id"`
-	PostID    int       `db:"post_id"`
-	UserID    int       `db:"user_id"`
-	Comment   string    `db:"comment"`
-	CreatedAt time.Time `db:"created_at"`
-	User      *User
-}
-
 func init() {
 	memcacheClient := memcache.New("localhost:11211")
 	store = gsm.NewMemcacheStore(memcacheClient, "isucogram_", []byte("sendagaya"))
@@ -93,6 +88,25 @@ func dbInitialize() {
 
 	for _, sql := range sqls {
 		db.Exec(sql)
+	}
+
+	conn := redisPool.Get()
+	conn.Do("FLUSHALL")
+	conn.Close()
+
+	comments := []*Comment{}
+	err := db.Select(&comments, "SELECT * FROM comments")
+	if err != nil {
+		handleError(err)
+		return
+	}
+	for _, c := range comments {
+		c.CreatedAtNano = c.CreatedAt.UnixNano()
+	}
+	err = commentStore.Set(comments)
+	if err != nil {
+		handleError(err)
+		return
 	}
 }
 
@@ -186,10 +200,11 @@ func makePosts(results []*Post, CSRFToken string, allComments bool) ([]*Post, er
 	var posts []*Post
 
 	for _, p := range results {
-		err := db.Get(&p.CommentCount, "SELECT COUNT(*) AS `count` FROM `comments` WHERE `post_id` = ?", p.ID)
+		cnt, err := commentStore.Count(commentStore.Query("post").GtEq(p.ID).LtEq(p.ID))
 		if err != nil {
 			return nil, err
 		}
+		p.CommentCount = cnt
 
 		query := "SELECT * FROM `comments` WHERE `post_id` = ? ORDER BY `created_at` DESC"
 		if !allComments {
@@ -456,8 +471,7 @@ func getAccountName(c web.C, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	commentCount := 0
-	cerr := db.Get(&commentCount, "SELECT COUNT(*) AS count FROM `comments` WHERE `user_id` = ?", user.ID)
+	commentCount, cerr := commentStore.Count(commentStore.Query("user").GtEq(user.ID).LtEq(user.ID))
 	if cerr != nil {
 		handleError(cerr)
 		return
@@ -739,8 +753,29 @@ func postComment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	body := r.FormValue("comment")
 	query := "INSERT INTO `comments` (`post_id`, `user_id`, `comment`) VALUES (?,?,?)"
-	db.Exec(query, postID, me.ID, r.FormValue("comment"))
+	result, cerr := db.Exec(query, postID, me.ID, body)
+	if cerr != nil {
+		handleError(cerr)
+		return
+	}
+	id, lerr := result.LastInsertId()
+	if lerr != nil {
+		handleError(lerr)
+		return
+	}
+	crerr := commentStore.Set(&Comment{
+		ID:            int(id),
+		PostID:        postID,
+		UserID:        me.ID,
+		Comment:       body,
+		CreatedAtNano: time.Now().UnixNano(),
+	})
+	if cerr != nil {
+		handleError(crerr)
+		return
+	}
 
 	http.Redirect(w, r, fmt.Sprintf("/posts/%d", postID), http.StatusFound)
 }
@@ -828,6 +863,10 @@ func main() {
 	if dbname == "" {
 		dbname = "isuconp"
 	}
+	redisURL := os.Getenv("ISUCONP_REDIS_URL")
+	if redisURL == "" {
+		redisURL = "redis://localhost:6379"
+	}
 
 	dsn := fmt.Sprintf(
 		"%s:%s@tcp(%s:%s)/%s?charset=utf8mb4&parseTime=true&loc=Local",
@@ -843,6 +882,20 @@ func main() {
 		log.Fatalf("Failed to connect to DB: %s.", err.Error())
 	}
 	defer db.Close()
+
+	redisPool = &redis.Pool{
+		MaxIdle:     10,
+		IdleTimeout: 10 * 60 * time.Second,
+
+		Dial: func() (redis.Conn, error) {
+			return redis.DialURL(redisURL)
+		},
+	}
+
+	commentStore, err = ro.New(redisPool.Get, &Comment{}, ro.WithScorer(CommentScorerMap))
+	if err != nil {
+		log.Fatalf("Failed to create comment store instance: %v", err)
+	}
 
 	goji.Get("/initialize", getInitialize)
 	goji.Get("/login", getLogin)
