@@ -97,7 +97,7 @@ func dbInitialize() {
 }
 
 func writeImage(postID int, ext string, img []byte) error {
-	return ioutil.WriteFile(fmt.Sprintf("../public/images/%d.%s", postID, ext), img, 0644)
+	return ioutil.WriteFile(fmt.Sprintf("../public/image/%d.%s", postID, ext), img, 0644)
 }
 
 func dumpImages(w http.ResponseWriter, r *http.Request) {
