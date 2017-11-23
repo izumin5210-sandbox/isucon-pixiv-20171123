@@ -58,8 +58,8 @@ type Post struct {
 	Mime         string    `db:"mime"`
 	CreatedAt    time.Time `db:"created_at"`
 	CommentCount int
-	Comments     []Comment
-	User         User
+	Comments     []*Comment
+	User         *User
 	CSRFToken    string
 }
 
@@ -69,7 +69,7 @@ type Comment struct {
 	UserID    int       `db:"user_id"`
 	Comment   string    `db:"comment"`
 	CreatedAt time.Time `db:"created_at"`
-	User      User
+	User      *User
 }
 
 func init() {
@@ -148,18 +148,18 @@ func getSession(r *http.Request) *sessions.Session {
 	return session
 }
 
-func getSessionUser(r *http.Request) User {
+func getSessionUser(r *http.Request) *User {
 	session := getSession(r)
 	uid, ok := session.Values["user_id"]
 	if !ok || uid == nil {
-		return User{}
+		return &User{}
 	}
 
-	u := User{}
+	u := &User{}
 
-	err := db.Get(&u, "SELECT * FROM `users` WHERE `id` = ?", uid)
+	err := db.Get(u, "SELECT * FROM `users` WHERE `id` = ?", uid)
 	if err != nil {
-		return User{}
+		return &User{}
 	}
 
 	return u
@@ -178,8 +178,8 @@ func getFlash(w http.ResponseWriter, r *http.Request, key string) string {
 	}
 }
 
-func makePosts(results []Post, CSRFToken string, allComments bool) ([]Post, error) {
-	var posts []Post
+func makePosts(results []*Post, CSRFToken string, allComments bool) ([]*Post, error) {
+	var posts []*Post
 
 	for _, p := range results {
 		err := db.Get(&p.CommentCount, "SELECT COUNT(*) AS `count` FROM `comments` WHERE `post_id` = ?", p.ID)
@@ -191,7 +191,7 @@ func makePosts(results []Post, CSRFToken string, allComments bool) ([]Post, erro
 		if !allComments {
 			query += " LIMIT 3"
 		}
-		var comments []Comment
+		var comments []*Comment
 		cerr := db.Select(&comments, query, p.ID)
 		if cerr != nil {
 			return nil, cerr
@@ -229,7 +229,7 @@ func makePosts(results []Post, CSRFToken string, allComments bool) ([]Post, erro
 	return posts, nil
 }
 
-func imageURL(p Post) string {
+func imageURL(p *Post) string {
 	ext := ""
 	if p.Mime == "image/jpeg" {
 		ext = ".jpg"
@@ -242,7 +242,7 @@ func imageURL(p Post) string {
 	return "/image/" + strconv.Itoa(p.ID) + ext
 }
 
-func isLogin(u User) bool {
+func isLogin(u *User) bool {
 	return u.ID != 0
 }
 
@@ -284,7 +284,7 @@ func getLogin(w http.ResponseWriter, r *http.Request) {
 		getTemplPath("layout.html"),
 		getTemplPath("login.html")),
 	).Execute(w, struct {
-		Me    User
+		Me    *User
 		Flash string
 	}{me, getFlash(w, r, "notice")})
 }
@@ -323,9 +323,9 @@ func getRegister(w http.ResponseWriter, r *http.Request) {
 		getTemplPath("layout.html"),
 		getTemplPath("register.html")),
 	).Execute(w, struct {
-		Me    User
+		Me    *User
 		Flash string
-	}{User{}, getFlash(w, r, "notice")})
+	}{&User{}, getFlash(w, r, "notice")})
 }
 
 func postRegister(w http.ResponseWriter, r *http.Request) {
@@ -391,7 +391,7 @@ func getLogout(w http.ResponseWriter, r *http.Request) {
 func getIndex(w http.ResponseWriter, r *http.Request) {
 	me := getSessionUser(r)
 
-	results := []Post{}
+	results := []*Post{}
 
 	err := db.Select(&results, "SELECT `id`, `user_id`, `body`, `mime`, `created_at` FROM `posts` ORDER BY `created_at` DESC")
 	if err != nil {
@@ -415,16 +415,16 @@ func getIndex(w http.ResponseWriter, r *http.Request) {
 		getTemplPath("posts.html"),
 		getTemplPath("post.html"),
 	)).Execute(w, struct {
-		Posts     []Post
-		Me        User
+		Posts     []*Post
+		Me        *User
 		CSRFToken string
 		Flash     string
 	}{posts, me, getCSRFToken(r), getFlash(w, r, "notice")})
 }
 
 func getAccountName(c web.C, w http.ResponseWriter, r *http.Request) {
-	user := User{}
-	uerr := db.Get(&user, "SELECT * FROM `users` WHERE `account_name` = ? AND `del_flg` = 0", c.URLParams["accountName"])
+	user := &User{}
+	uerr := db.Get(user, "SELECT * FROM `users` WHERE `account_name` = ? AND `del_flg` = 0", c.URLParams["accountName"])
 
 	if uerr != nil {
 		fmt.Println(uerr)
@@ -436,7 +436,7 @@ func getAccountName(c web.C, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	results := []Post{}
+	results := []*Post{}
 
 	rerr := db.Select(&results, "SELECT `id`, `user_id`, `body`, `mime`, `created_at` FROM `posts` WHERE `user_id` = ? ORDER BY `created_at` DESC", user.ID)
 	if rerr != nil {
@@ -498,12 +498,12 @@ func getAccountName(c web.C, w http.ResponseWriter, r *http.Request) {
 		getTemplPath("posts.html"),
 		getTemplPath("post.html"),
 	)).Execute(w, struct {
-		Posts          []Post
-		User           User
+		Posts          []*Post
+		User           *User
 		PostCount      int
 		CommentCount   int
 		CommentedCount int
-		Me             User
+		Me             *User
 	}{posts, user, postCount, commentCount, commentedCount, me})
 }
 
@@ -525,7 +525,7 @@ func getPosts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	results := []Post{}
+	results := []*Post{}
 	rerr := db.Select(&results, "SELECT `id`, `user_id`, `body`, `mime`, `created_at` FROM `posts` WHERE `created_at` <= ? ORDER BY `created_at` DESC", t.Format(ISO8601_FORMAT))
 	if rerr != nil {
 		fmt.Println(rerr)
@@ -560,7 +560,7 @@ func getPostsID(c web.C, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	results := []Post{}
+	results := []*Post{}
 	rerr := db.Select(&results, "SELECT * FROM `posts` WHERE `id` = ?", pid)
 	if rerr != nil {
 		fmt.Println(rerr)
@@ -591,8 +591,8 @@ func getPostsID(c web.C, w http.ResponseWriter, r *http.Request) {
 		getTemplPath("post_id.html"),
 		getTemplPath("post.html"),
 	)).Execute(w, struct {
-		Post Post
-		Me   User
+		Post *Post
+		Me   *User
 	}{p, me})
 }
 
@@ -683,8 +683,8 @@ func getImage(c web.C, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	post := Post{}
-	derr := db.Get(&post, "SELECT * FROM `posts` WHERE `id` = ?", pid)
+	post := &Post{}
+	derr := db.Get(post, "SELECT * FROM `posts` WHERE `id` = ?", pid)
 	if derr != nil {
 		fmt.Println(derr.Error())
 		return
@@ -742,7 +742,7 @@ func getAdminBanned(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	users := []User{}
+	users := []*User{}
 	err := db.Select(&users, "SELECT * FROM `users` WHERE `authority` = 0 AND `del_flg` = 0 ORDER BY `created_at` DESC")
 	if err != nil {
 		fmt.Println(err)
@@ -753,8 +753,8 @@ func getAdminBanned(w http.ResponseWriter, r *http.Request) {
 		getTemplPath("layout.html"),
 		getTemplPath("banned.html")),
 	).Execute(w, struct {
-		Users     []User
-		Me        User
+		Users     []*User
+		Me        *User
 		CSRFToken string
 	}{users, me, getCSRFToken(r)})
 }
