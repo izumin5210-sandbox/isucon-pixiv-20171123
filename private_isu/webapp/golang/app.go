@@ -116,6 +116,22 @@ func dbInitialize() {
 	for _, sql := range sqls {
 		db.Exec(sql)
 	}
+
+	conn := redisPool.Get()
+	conn.Do("FLUSHALL")
+	conn.Close()
+
+	comments := []*Comment{}
+	err := db.Select(&comments, "SELECT * FROM comments")
+	if err != nil {
+		handleError(err)
+		return
+	}
+	err = commentStore.Set(comments)
+	if err != nil {
+		handleError(err)
+		return
+	}
 }
 
 func writeImage(postID int, ext string, img []byte) error {
@@ -761,8 +777,28 @@ func postComment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	body := r.FormValue("comment")
 	query := "INSERT INTO `comments` (`post_id`, `user_id`, `comment`) VALUES (?,?,?)"
-	db.Exec(query, postID, me.ID, r.FormValue("comment"))
+	result, cerr := db.Exec(query, postID, me.ID, body)
+	if cerr != nil {
+		handleError(cerr)
+		return
+	}
+	id, lerr := result.LastInsertId()
+	if lerr != nil {
+		handleError(lerr)
+		return
+	}
+	crerr := commentStore.Set(&Comment{
+		ID:      int(id),
+		PostID:  postID,
+		UserID:  me.ID,
+		Comment: body,
+	})
+	if cerr != nil {
+		handleError(crerr)
+		return
+	}
 
 	http.Redirect(w, r, fmt.Sprintf("/posts/%d", postID), http.StatusFound)
 }
