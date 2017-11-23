@@ -1,0 +1,10 @@
+[Unit]
+Description=Redis
+
+[Service]
+Type=notify
+ExecStart=/usr/local/bin/redis-server /etc/redis/redis.conf
+ExecStop=/usr/local/bin/redis-cli -p 6379 shutdown
+
+[Install]
+WantedBy=multi-user.target
