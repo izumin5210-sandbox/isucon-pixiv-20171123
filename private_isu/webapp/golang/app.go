@@ -20,16 +20,21 @@ import (
 
 	"github.com/bradfitz/gomemcache/memcache"
 	gsm "github.com/bradleypeabody/gorilla-sessions-memcache"
+	"github.com/garyburd/redigo/redis"
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/gorilla/sessions"
+	"github.com/izumin5210/ro"
+	"github.com/izumin5210/ro/types"
 	"github.com/jmoiron/sqlx"
 	"github.com/zenazn/goji"
 	"github.com/zenazn/goji/web"
 )
 
 var (
-	db    *sqlx.DB
-	store *gsm.MemcacheStore
+	db           *sqlx.DB
+	store        *gsm.MemcacheStore
+	redisPool    *redis.Pool
+	commentStore ro.Store
 )
 
 var (
@@ -69,12 +74,29 @@ type Post struct {
 }
 
 type Comment struct {
-	ID        int       `db:"id"`
-	PostID    int       `db:"post_id"`
-	UserID    int       `db:"user_id"`
-	Comment   string    `db:"comment"`
-	CreatedAt time.Time `db:"created_at"`
+	ro.Model
+	ID        int       `db:"id" redis:"id"`
+	PostID    int       `db:"post_id" redis:"post_id"`
+	UserID    int       `db:"user_id" redis:"user_id"`
+	Comment   string    `db:"comment" redis:"comment"`
+	CreatedAt time.Time `db:"created_at" redis:"created_at"`
 	User      *User
+}
+
+func (c *Comment) GetKeySuffix() string {
+	return fmt.Sprint(c.ID)
+}
+
+var CommentScorerMap = map[string]types.ScorerFunc{
+	"post": func(m types.Model) interface{} {
+		return m.(*Comment).PostID
+	},
+	"user": func(m types.Model) interface{} {
+		return m.(*Comment).UserID
+	},
+	"created_at": func(m types.Model) interface{} {
+		return m.(*Comment).CreatedAt.UnixNano()
+	},
 }
 
 func init() {
@@ -828,6 +850,10 @@ func main() {
 	if dbname == "" {
 		dbname = "isuconp"
 	}
+	redisURL := os.Getenv("ISUCONP_REDIS_URL")
+	if redisURL == "" {
+		redisURL = "redis://localhost:6379"
+	}
 
 	dsn := fmt.Sprintf(
 		"%s:%s@tcp(%s:%s)/%s?charset=utf8mb4&parseTime=true&loc=Local",
@@ -843,6 +869,20 @@ func main() {
 		log.Fatalf("Failed to connect to DB: %s.", err.Error())
 	}
 	defer db.Close()
+
+	redisPool = &redis.Pool{
+		MaxIdle:     10,
+		IdleTimeout: 10 * 60 * time.Second,
+
+		Dial: func() (redis.Conn, error) {
+			return redis.DialURL(redisURL)
+		},
+	}
+
+	commentStore, err = ro.New(redisPool.Get, &Comment{}, ro.WithScorer(CommentScorerMap))
+	if err != nil {
+		log.Fatalf("Failed to create comment store instance: %v", err)
+	}
 
 	goji.Get("/initialize", getInitialize)
 	goji.Get("/login", getLogin)
