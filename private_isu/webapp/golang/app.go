@@ -32,6 +32,11 @@ var (
 	store *gsm.MemcacheStore
 )
 
+var (
+	regexpAccountName = regexp.MustCompile("\\A[0-9a-zA-Z_]{3,}\\z")
+	regexpPassword    = regexp.MustCompile("\\A[0-9a-zA-Z_]{6,}\\z")
+)
+
 const (
 	postsPerPage   = 20
 	ISO8601_FORMAT = "2006-01-02T15:04:05-07:00"
@@ -108,12 +113,7 @@ func tryLogin(accountName, password string) *User {
 }
 
 func validateUser(accountName, password string) bool {
-	if !(regexp.MustCompile("\\A[0-9a-zA-Z_]{3,}\\z").MatchString(accountName) &&
-		regexp.MustCompile("\\A[0-9a-zA-Z_]{6,}\\z").MatchString(password)) {
-		return false
-	}
-
-	return true
+	return regexpAccountName.MatchString(accountName) && regexpPassword.MatchString(password)
 }
 
 // 今回のGo実装では言語側のエスケープの仕組みが使えないのでOSコマンドインジェクション対策できない
