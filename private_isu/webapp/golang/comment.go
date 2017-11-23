@@ -23,14 +23,14 @@ func (c *Comment) GetKeySuffix() string {
 	return fmt.Sprint(c.ID)
 }
 
-var CommentScorerMap = map[string]types.ScorerFunc{
-	"post": func(m types.Model) interface{} {
-		return m.(*Comment).PostID
+var CommentScorerFuncs = []types.ScorerFunc{
+	func(m types.Model) (string, interface{}) {
+		return "post", m.(*Comment).PostID
 	},
-	"user": func(m types.Model) interface{} {
-		return m.(*Comment).UserID
+	func(m types.Model) (string, interface{}) {
+		return "user", m.(*Comment).UserID
 	},
-	"created_at": func(m types.Model) interface{} {
-		return m.(*Comment).CreatedAtNano
+	func(m types.Model) (string, interface{}) {
+		return "created_at", m.(*Comment).CreatedAtNano
 	},
 }
