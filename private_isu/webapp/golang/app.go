@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/agatan/accessprof"
 	"github.com/bradfitz/gomemcache/memcache"
 	gsm "github.com/bradleypeabody/gorilla-sessions-memcache"
 	"github.com/garyburd/redigo/redis"
@@ -897,6 +898,11 @@ func main() {
 		log.Fatalf("Failed to create comment store instance: %v", err)
 	}
 
+	if debug {
+		goji.Use(func(h http.Handler) http.Handler {
+			return &accessprof.Handler{Handler: h, ReportPath: "/accessprof"}
+		})
+	}
 	goji.Get("/initialize", getInitialize)
 	goji.Get("/login", getLogin)
 	goji.Post("/login", postLogin)
