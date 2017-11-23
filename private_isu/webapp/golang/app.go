@@ -16,6 +16,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/bradfitz/gomemcache/memcache"
@@ -101,10 +102,10 @@ func writeImage(postID int, ext string, img []byte) error {
 }
 
 func dumpImages(w http.ResponseWriter, r *http.Request) {
-	posts := []*Post{}
-	limit := 10
+	limit := 100
 	i := 0
 	for {
+		posts := []*Post{}
 		err := db.Select(&posts, fmt.Sprintf("SELECT `id`, `mime`, `imgdata` FROM `posts` LIMIT %d OFFSET %d", limit, i*limit))
 		if err != nil {
 			panic(err)
@@ -113,23 +114,31 @@ func dumpImages(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusOK)
 			break
 		}
-		for _, p := range posts {
-			ext := ""
-			switch p.Mime {
-			case "image/jpeg":
-				ext = "jpg"
-			case "image/png":
-				ext = "png"
-			case "image/gif":
-				ext = "gif"
-			default:
-				panic("Unknown image format")
-			}
-			err := writeImage(p.ID, ext, p.Imgdata)
-			if err != nil {
-				panic(err)
-			}
+
+		var wg sync.WaitGroup
+
+		for _, post := range posts {
+			wg.Add(1)
+			go func(p *Post) {
+				defer wg.Done()
+				ext := ""
+				switch p.Mime {
+				case "image/jpeg":
+					ext = "jpg"
+				case "image/png":
+					ext = "png"
+				case "image/gif":
+					ext = "gif"
+				default:
+					panic("Unknown image format")
+				}
+				err := writeImage(p.ID, ext, p.Imgdata)
+				if err != nil {
+					panic(err)
+				}
+			}(post)
 		}
+		wg.Wait()
 		i++
 	}
 }
