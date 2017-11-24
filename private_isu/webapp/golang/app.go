@@ -16,6 +16,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/bradfitz/gomemcache/memcache"
@@ -33,6 +34,7 @@ var (
 	db           *sqlx.DB
 	store        *gsm.MemcacheStore
 	redisPool    *redis.Pool
+	userStore    ro.Store
 	commentStore ro.Store
 )
 
@@ -49,15 +51,6 @@ const (
 	// CSRF Token error
 	StatusUnprocessableEntity = 422
 )
-
-type User struct {
-	ID          int       `db:"id"`
-	AccountName string    `db:"account_name"`
-	Passhash    string    `db:"passhash"`
-	Authority   int       `db:"authority"`
-	DelFlg      int       `db:"del_flg"`
-	CreatedAt   time.Time `db:"created_at"`
-}
 
 type Post struct {
 	ID           int       `db:"id"`
@@ -94,20 +87,47 @@ func dbInitialize() {
 	conn.Do("FLUSHALL")
 	conn.Close()
 
-	comments := []*Comment{}
-	err := db.Select(&comments, "SELECT * FROM comments")
-	if err != nil {
-		handleError(err)
-		return
-	}
-	for _, c := range comments {
-		c.CreatedAtNano = c.CreatedAt.UnixNano()
-	}
-	err = commentStore.Set(comments)
-	if err != nil {
-		handleError(err)
-		return
-	}
+	var wg sync.WaitGroup
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		comments := []*Comment{}
+		err := db.Select(&comments, "SELECT * FROM comments")
+		if err != nil {
+			handleError(err)
+			return
+		}
+		for _, c := range comments {
+			c.CreatedAtNano = c.CreatedAt.UnixNano()
+		}
+		err = commentStore.Set(comments)
+		if err != nil {
+			handleError(err)
+			return
+		}
+	}()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		users := []*User{}
+		err := db.Select(&users, "SELECT * FROM users")
+		if err != nil {
+			handleError(err)
+			return
+		}
+		for _, u := range users {
+			u.CreatedAtNano = u.CreatedAt.UnixNano()
+		}
+		err = userStore.Set(users)
+		if err != nil {
+			handleError(err)
+			return
+		}
+	}()
+
+	wg.Wait()
 }
 
 func writeImage(postID int, ext string, img []byte) error {
@@ -115,15 +135,17 @@ func writeImage(postID int, ext string, img []byte) error {
 }
 
 func tryLogin(accountName, password string) *User {
-	u := User{}
-	err := db.Get(&u, "SELECT * FROM users WHERE account_name = ? AND del_flg = 0", accountName)
-	if err != nil {
+	users := []*User{}
+	err := userStore.Select(&users, userStore.Query(fmt.Sprintf("accountName:%s", accountName)).Eq(0).Limit(1))
+	if err != nil || len(users) == 0 {
 		return nil
 	}
 
-	if &u != nil && calculatePasshash(u.AccountName, password) == u.Passhash {
-		return &u
-	} else if &u == nil {
+	u := users[0]
+
+	if u != nil && !u.IsBanned() && calculatePasshash(u.AccountName, password) == u.Passhash {
+		return u
+	} else if u == nil {
 		return nil
 	} else {
 		return nil
@@ -155,13 +177,18 @@ func getSession(r *http.Request) *sessions.Session {
 func getSessionUser(r *http.Request) *User {
 	session := getSession(r)
 	uid, ok := session.Values["user_id"]
+	var id int
 	if !ok || uid == nil {
 		return &User{}
+	} else if v, ok := uid.(int64); ok {
+		id = int(v)
+	} else if v, ok := uid.(int); ok {
+		id = v
 	}
 
-	u := &User{}
+	u := &User{ID: id}
 
-	err := db.Get(u, "SELECT * FROM `users` WHERE `id` = ?", uid)
+	err := userStore.Get(u)
 	if err != nil {
 		return &User{}
 	}
@@ -203,8 +230,8 @@ func makePosts(results []*Post, CSRFToken string, allComments bool) ([]*Post, er
 		}
 
 		for i := 0; i < len(comments); i++ {
-			comments[i].User = &User{}
-			uerr := db.Get(comments[i].User, "SELECT * FROM `users` WHERE `id` = ?", comments[i].UserID)
+			comments[i].User = &User{ID: comments[i].UserID}
+			uerr := userStore.Get(comments[i].User)
 			if uerr != nil {
 				return nil, uerr
 			}
@@ -217,8 +244,8 @@ func makePosts(results []*Post, CSRFToken string, allComments bool) ([]*Post, er
 
 		p.Comments = comments
 
-		p.User = &User{}
-		perr := db.Get(p.User, "SELECT * FROM `users` WHERE `id` = ?", p.UserID)
+		p.User = &User{ID: p.UserID}
+		perr := userStore.Get(p.User)
 		if perr != nil {
 			return nil, perr
 		}
@@ -353,11 +380,13 @@ func postRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	exists := 0
-	// ユーザーが存在しない場合はエラーになるのでエラーチェックはしない
-	db.Get(&exists, "SELECT 1 FROM users WHERE `account_name` = ?", accountName)
+	exists, err := userStore.Count(userStore.Query(fmt.Sprintf("accountName:%s", accountName)).Eq(0).Limit(1))
+	if err != nil {
+		handleError(err)
+		return
+	}
 
-	if exists == 1 {
+	if exists != 0 {
 		session := getSession(r)
 		session.Values["notice"] = "アカウント名がすでに使われています"
 		session.Save(r, w)
@@ -367,7 +396,8 @@ func postRegister(w http.ResponseWriter, r *http.Request) {
 	}
 
 	query := "INSERT INTO `users` (`account_name`, `passhash`) VALUES (?,?)"
-	result, eerr := db.Exec(query, accountName, calculatePasshash(accountName, password))
+	passhash := calculatePasshash(accountName, password)
+	result, eerr := db.Exec(query, accountName, passhash)
 	if eerr != nil {
 		handleError(eerr)
 		return
@@ -382,6 +412,12 @@ func postRegister(w http.ResponseWriter, r *http.Request) {
 	session.Values["user_id"] = uid
 	session.Values["csrf_token"] = secureRandomStr(16)
 	session.Save(r, w)
+	userStore.Set(&User{
+		ID:            int(uid),
+		AccountName:   accountName,
+		Passhash:      passhash,
+		CreatedAtNano: time.Now().UnixNano(),
+	})
 
 	http.Redirect(w, r, "/", http.StatusFound)
 }
@@ -430,13 +466,15 @@ func getIndex(w http.ResponseWriter, r *http.Request) {
 }
 
 func getAccountName(c web.C, w http.ResponseWriter, r *http.Request) {
-	user := &User{}
-	uerr := db.Get(user, "SELECT * FROM `users` WHERE `account_name` = ? AND `del_flg` = 0", c.URLParams["accountName"])
+	users := []*User{}
+	uerr := userStore.Select(&users, userStore.Query(fmt.Sprintf("accountName:%s", c.URLParams["accountName"])).Eq(0).Limit(1))
 
 	if uerr != nil {
 		handleError(uerr)
 		return
 	}
+
+	user := users[0]
 
 	if user.ID == 0 {
 		w.WriteHeader(http.StatusNotFound)
@@ -779,7 +817,7 @@ func getAdminBanned(w http.ResponseWriter, r *http.Request) {
 	}
 
 	users := []*User{}
-	err := db.Select(&users, "SELECT * FROM `users` WHERE `authority` = 0 AND `del_flg` = 0 ORDER BY `created_at` DESC")
+	err := userStore.Select(&users, userStore.Query("created_at").Gt(0).Reverse())
 	if err != nil {
 		handleError(err)
 		return
@@ -878,6 +916,7 @@ func main() {
 		},
 	}
 
+	userStore, err = ro.New(redisPool.Get, &User{}, ro.WithScorers(UserScorerFuncs))
 	commentStore, err = ro.New(redisPool.Get, &Comment{}, ro.WithScorers(CommentScorerFuncs))
 	if err != nil {
 		log.Fatalf("Failed to create comment store instance: %v", err)
